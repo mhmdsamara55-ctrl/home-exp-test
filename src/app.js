@@ -100,7 +100,7 @@ async function joinFamily() {
   if (!code) { showAlert('famErrorAlert', 'أدخل كود الدعوة'); return; }
 
   try {
-    const result = await joinFamilyByCode(currentUser, code);
+    const result = await joinFamilyByCode(currentUser, code, previousFamilyCode);
     if (result.status === 'invalid') { showAlert('famErrorAlert', 'كود الدعوة غير صحيح'); return; }
     if (result.status === 'full') {
       showAlert('famErrorAlert', `هذه العيلة وصلت الحد الأقصى (${MAX_FAMILY_MEMBERS} أشخاص). الخطط المدفوعة قريباً 🚀`);
@@ -378,7 +378,7 @@ async function renderMembers() {
           </div>
         </div>
         <div style="display:flex; gap:6px;">
-          <button class="btn btn-small" style="width:auto; background:var(--success);" onclick="approveJoinRequest('${r.uid}','${r.name}','${r.email}')">✓ قبول</button>
+          <button class="btn btn-small" style="width:auto; background:var(--success);" onclick="approveJoinRequest('${r.uid}','${r.name}','${r.email}','${r.previousFamilyCode || ''}')">✓ قبول</button>
           <button class="delete-btn" onclick="rejectJoinRequest('${r.uid}')">✕ رفض</button>
         </div>
       </div>`).join('');
@@ -387,13 +387,13 @@ async function renderMembers() {
   }
 }
 
-async function approveJoinRequest(uid, name, email) {
+async function approveJoinRequest(uid, name, email, previousFamilyCode) {
   try {
     if ((currentFamily.members || []).length >= MAX_FAMILY_MEMBERS) {
       showAlert('errorAlert', `وصلتوا الحد الأقصى (${MAX_FAMILY_MEMBERS} أشخاص)`);
       return;
     }
-    const { members, memberUids } = await approveJoinRequestDoc(currentFamily.code, uid, name, email, currentFamily.members, currentFamily.memberUids);
+    const { members, memberUids } = await approveJoinRequestDoc(currentFamily.code, uid, name, email, currentFamily.members, currentFamily.memberUids, previousFamilyCode || null);
     currentFamily.members = members;
     currentFamily.memberUids = memberUids;
     showAlert('successAlert', 'تم قبول ' + name + ' بالعيلة');
