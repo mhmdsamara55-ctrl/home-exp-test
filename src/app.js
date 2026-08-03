@@ -1,5 +1,6 @@
 import { db, auth } from './firebase/config.js';
 import { GOOGLE_CLIENT_ID, MAX_FAMILY_MEMBERS, EXPENSE_CATEGORIES, PAGE_TITLES } from './shared/constants.js';
+import { handleSignIn, logout, onAuthChange } from './auth/auth-service.js';
 
 let currentUser = null;
 let currentFamily = null;
@@ -26,11 +27,14 @@ function selectIncomeSource(value, el) {
 }
 
 window.onload = function() {
-  google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: handleSignIn });
+  google.accounts.id.initialize({
+    client_id: GOOGLE_CLIENT_ID,
+    callback: (response) => handleSignIn(response, (msg) => showAlert('errorAlert', 'خطأ: ' + msg))
+  });
   google.accounts.id.renderButton(document.getElementById('google_signin_button'),
     { theme:'filled_blue', size:'large', width:'100%' });
 
-  auth.onAuthStateChanged(async user => {
+  onAuthChange(async user => {
     if (user) {
       currentUser = user;
       await checkUserFamily();
@@ -41,14 +45,6 @@ window.onload = function() {
     }
   });
 };
-
-function handleSignIn(response) {
-  firebase.auth().signInWithCredential(
-    firebase.auth.GoogleAuthProvider.credential(response.credential)
-  ).catch(err => showAlert('errorAlert', 'خطأ: ' + err.message));
-}
-
-function logout() { auth.signOut(); }
 
 function showOnly(which) {
   document.getElementById('loginScreen').style.display = which === 'login' ? 'flex' : 'none';
