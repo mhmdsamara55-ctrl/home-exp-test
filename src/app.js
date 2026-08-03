@@ -1,10 +1,11 @@
 import { db, auth } from './firebase/config.js';
 import { GOOGLE_CLIENT_ID, MAX_FAMILY_MEMBERS, EXPENSE_CATEGORIES, PAGE_TITLES } from './shared/constants.js';
 import { handleSignIn, logout, onAuthChange } from './auth/auth-service.js';
-import { fetchUserFamily, createFamilyDoc, joinFamilyByCode, fetchFamilyMembers, fetchJoinRequests, approveJoinRequestDoc, rejectJoinRequestDoc } from './family/family-service.js';
+import { fetchUserFamily, createFamilyDoc, joinFamilyByCode, fetchFamilyMembers, fetchJoinRequests, approveJoinRequestDoc, rejectJoinRequestDoc, leaveOldFamily } from './family/family-service.js';
 
 let currentUser = null;
 let currentFamily = null;
+let previousFamilyCode = null; // كود العيلة اللي طلع منها المستخدم، لتنظيف عضويته منها عند تبديل العيلة
 let allTransactions = [];
 let categoryChartInstance = null;
 let incomeExpenseChartInstance = null;
@@ -53,7 +54,11 @@ function showOnly(which) {
   document.getElementById('appLayout').classList.toggle('show', which === 'app');
 }
 
-function showFamilyScreen() { currentFamily = null; showOnly('family'); }
+function showFamilyScreen() {
+  previousFamilyCode = currentFamily ? currentFamily.code : null;
+  currentFamily = null;
+  showOnly('family');
+}
 
 function showCreateForm() {
   document.getElementById('createForm').style.display = 'block';
@@ -82,6 +87,10 @@ async function createFamily() {
 
   try {
     currentFamily = await createFamilyDoc(currentUser, name);
+    if (previousFamilyCode && previousFamilyCode !== currentFamily.code) {
+      await leaveOldFamily(currentUser.uid, previousFamilyCode);
+    }
+    previousFamilyCode = null;
     enterApp();
   } catch (e) { showAlert('famErrorAlert', 'خطأ: ' + e.message); }
 }
@@ -99,6 +108,10 @@ async function joinFamily() {
     }
     if (result.status === 'entered') {
       currentFamily = result.family;
+      if (previousFamilyCode && previousFamilyCode !== currentFamily.code) {
+        await leaveOldFamily(currentUser.uid, previousFamilyCode);
+      }
+      previousFamilyCode = null;
       enterApp();
       return;
     }
@@ -832,3 +845,4 @@ window.showFamilyScreen = showFamilyScreen;
 window.showJoinForm = showJoinForm;
 window.switchPage = switchPage;
 
+ 
