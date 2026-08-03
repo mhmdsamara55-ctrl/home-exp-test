@@ -1,6 +1,7 @@
 import { db, auth } from './firebase/config.js';
 import { GOOGLE_CLIENT_ID, MAX_FAMILY_MEMBERS, EXPENSE_CATEGORIES, PAGE_TITLES } from './shared/constants.js';
 import { handleSignIn, logout, onAuthChange } from './auth/auth-service.js';
+import { fetchUserFamily, createFamilyDoc, joinFamilyByCode, fetchFamilyMembers, fetchJoinRequests, approveJoinRequestDoc, rejectJoinRequestDoc } from './family/family-service.js';
 
 let currentUser = null;
 let currentFamily = null;
@@ -65,43 +66,22 @@ function showJoinForm() {
 
 async function checkUserFamily() {
   try {
-    const userDoc = await db.collection('users').doc(currentUser.uid).get();
-    if (userDoc.exists && userDoc.data().familyCode) {
-      const code = userDoc.data().familyCode;
-      const famDoc = await db.collection('families').doc(code).get();
-      if (famDoc.exists) {
-        const famData = famDoc.data();
-        let memberUids = famData.memberUids;
-        if (!memberUids) {
-          memberUids = (famData.members || []).map(m => m.uid);
-          await db.collection('families').doc(code).update({ memberUids });
-        }
-        currentFamily = { code, name: famData.name, members: famData.members || [], memberUids, createdBy: famData.createdBy };
-        enterApp();
-        return;
-      }
+    const family = await fetchUserFamily(currentUser.uid);
+    if (family) {
+      currentFamily = family;
+      enterApp();
+      return;
     }
     showOnly('family');
   } catch (e) { showOnly('family'); }
 }
-
-function generateCode() { return Math.random().toString(36).substring(2, 8).toUpperCase(); }
 
 async function createFamily() {
   const name = document.getElementById('newFamilyName').value.trim();
   if (!name) { showAlert('famErrorAlert', 'أدخل اسم العيلة'); return; }
 
   try {
-    const code = generateCode();
-    const members = [{ uid: currentUser.uid, name: currentUser.displayName, email: currentUser.email }];
-    const memberUids = [currentUser.uid];
-    await db.collection('families').doc(code).set({
-      name, createdBy: currentUser.uid,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-      members, memberUids, plan: 'free'
-    });
-    await db.collection('users').doc(currentUser.uid).set({ familyCode: code, name: currentUser.displayName, email: currentUser.email });
-    currentFamily = { code, name, members, memberUids, createdBy: currentUser.uid };
+    currentFamily = await createFamilyDoc(currentUser, name);
     enterApp();
   } catch (e) { showAlert('famErrorAlert', 'خطأ: ' + e.message); }
 }
@@ -111,32 +91,18 @@ async function joinFamily() {
   if (!code) { showAlert('famErrorAlert', 'أدخل كود الدعوة'); return; }
 
   try {
-    const famDoc = await db.collection('families').doc(code).get();
-    if (!famDoc.exists) { showAlert('famErrorAlert', 'كود الدعوة غير صحيح'); return; }
-
-    const famData = famDoc.data();
-    const members = famData.members || [];
-    const memberUids = famData.memberUids || members.map(m => m.uid);
-    const already = members.some(m => m.uid === currentUser.uid);
-
-    if (already) {
-      // منضم فعلاً (تمت الموافقة عليه سابقاً) — يدخل مباشرة
-      await db.collection('users').doc(currentUser.uid).set({ familyCode: code, name: currentUser.displayName, email: currentUser.email });
-      currentFamily = { code, name: famData.name, members, memberUids, createdBy: famData.createdBy };
-      enterApp();
-      return;
-    }
-
-    if (members.length >= MAX_FAMILY_MEMBERS) {
+    const result = await joinFamilyByCode(currentUser, code);
+    if (result.status === 'invalid') { showAlert('famErrorAlert', 'كود الدعوة غير صحيح'); return; }
+    if (result.status === 'full') {
       showAlert('famErrorAlert', `هذه العيلة وصلت الحد الأقصى (${MAX_FAMILY_MEMBERS} أشخاص). الخطط المدفوعة قريباً 🚀`);
       return;
     }
-
-    // بدل الانضمام المباشر: إرسال طلب انضمام ينتظر موافقة مسؤول العيلة
-    await db.collection('families').doc(code).collection('joinRequests').doc(currentUser.uid).set({
-      uid: currentUser.uid, name: currentUser.displayName, email: currentUser.email,
-      requestedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    if (result.status === 'entered') {
+      currentFamily = result.family;
+      enterApp();
+      return;
+    }
+    // pending
     showAlert('famSuccessAlert', '✅ تم إرسال طلب انضمامك، بانتظار موافقة مسؤول العيلة. جرب تدخل بنفس الكود بعد ما توافق.');
   } catch (e) { showAlert('famErrorAlert', 'خطأ: ' + e.message); }
 }
@@ -363,8 +329,7 @@ function renderCharts() {
 
 async function renderMembers() {
   try {
-    const famDoc = await db.collection('families').doc(currentFamily.code).get();
-    const members = famDoc.data().members || [];
+    const members = await fetchFamilyMembers(currentFamily.code);
     currentFamily.members = members;
 
     document.getElementById('memberCount').textContent = members.length;
@@ -386,13 +351,11 @@ async function renderMembers() {
     const joinCard = document.getElementById('joinRequestsCard');
     if (!isAdmin) { joinCard.style.display = 'none'; return; }
 
-    const reqSnap = await db.collection('families').doc(currentFamily.code).collection('joinRequests').get();
-    if (reqSnap.empty) { joinCard.style.display = 'none'; return; }
+    const requests = await fetchJoinRequests(currentFamily.code);
+    if (requests.length === 0) { joinCard.style.display = 'none'; return; }
 
     joinCard.style.display = 'block';
-    document.getElementById('joinRequestsList').innerHTML = reqSnap.docs.map(doc => {
-      const r = doc.data();
-      return `
+    document.getElementById('joinRequestsList').innerHTML = requests.map(r => `
       <div class="member-row">
         <div class="member-info">
           <div class="member-avatar">${(r.name || '?').charAt(0).toUpperCase()}</div>
@@ -405,8 +368,7 @@ async function renderMembers() {
           <button class="btn btn-small" style="width:auto; background:var(--success);" onclick="approveJoinRequest('${r.uid}','${r.name}','${r.email}')">✓ قبول</button>
           <button class="delete-btn" onclick="rejectJoinRequest('${r.uid}')">✕ رفض</button>
         </div>
-      </div>`;
-    }).join('');
+      </div>`).join('');
   } catch (e) {
     showAlert('errorAlert', 'خطأ في تحميل الأعضاء: ' + e.message);
   }
@@ -418,10 +380,7 @@ async function approveJoinRequest(uid, name, email) {
       showAlert('errorAlert', `وصلتوا الحد الأقصى (${MAX_FAMILY_MEMBERS} أشخاص)`);
       return;
     }
-    const members = [...(currentFamily.members || []), { uid, name, email }];
-    const memberUids = [...(currentFamily.memberUids || []), uid];
-    await db.collection('families').doc(currentFamily.code).update({ members, memberUids });
-    await db.collection('families').doc(currentFamily.code).collection('joinRequests').doc(uid).delete();
+    const { members, memberUids } = await approveJoinRequestDoc(currentFamily.code, uid, name, email, currentFamily.members, currentFamily.memberUids);
     currentFamily.members = members;
     currentFamily.memberUids = memberUids;
     showAlert('successAlert', 'تم قبول ' + name + ' بالعيلة');
@@ -431,7 +390,7 @@ async function approveJoinRequest(uid, name, email) {
 
 async function rejectJoinRequest(uid) {
   try {
-    await db.collection('families').doc(currentFamily.code).collection('joinRequests').doc(uid).delete();
+    await rejectJoinRequestDoc(currentFamily.code, uid);
     showAlert('successAlert', 'تم رفض الطلب');
     renderMembers();
   } catch (e) { showAlert('errorAlert', 'خطأ بالرفض: ' + e.message); }
