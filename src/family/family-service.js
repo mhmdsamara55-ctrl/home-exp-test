@@ -92,3 +92,20 @@ export async function rejectJoinRequestDoc(code, uid) {
   await db.collection('families').doc(code).collection('joinRequests').doc(uid).delete();
 }
 
+// يحذف عضوية مستخدم من عيلة قديمة (يُستدعى عند تبديل العيلة، قبل الانضمام/الإنشاء للعيلة الجديدة)
+// حتى لا يبقى عضو "يتيم" بقائمة الأعضاء أو محسوب على الحد الأقصى لعيلة ما عاد فيها
+export async function leaveOldFamily(uid, oldFamilyCode) {
+  if (!oldFamilyCode) return;
+  try {
+    const famDoc = await db.collection('families').doc(oldFamilyCode).get();
+    if (!famDoc.exists) return;
+    const famData = famDoc.data();
+    const members = (famData.members || []).filter(m => m.uid !== uid);
+    const memberUids = (famData.memberUids || []).filter(u => u !== uid);
+    await db.collection('families').doc(oldFamilyCode).update({ members, memberUids });
+  } catch (e) {
+    // فشل التنظيف ما لازم يوقف عملية إنشاء/الانضمام للعيلة الجديدة
+    console.error('leaveOldFamily failed:', e.message);
+  }
+}
+
